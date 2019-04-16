@@ -3,12 +3,9 @@ import java.nio.file.{Path, Paths}
 import akka.actor.ActorSystem
 import akka.stream.ActorMaterializer
 import akka.stream.alpakka.file.scaladsl.Directory
-import akka.stream.alpakka.xml.{EndElement, StartElement}
-import akka.stream.alpakka.xml.scaladsl.{XmlParsing, XmlWriting}
 import akka.stream.scaladsl.{FileIO, Source}
 import akka.util.ByteString
 
-import scala.collection.immutable
 import scala.concurrent.Await
 import scala.concurrent.duration._
 
@@ -19,31 +16,18 @@ object Main extends App {
 
   def convert(file: Path): Source[ByteString, _] = {
     FileIO.fromPath(file)
-//      .map(x => {println("bs"); x})
-      .via(XmlParsing.parser)
-      .statefulMapConcat(() => {
-        var inArticle = false
-        var result = List()
-        _ match {
-          case s: StartElement if s.localName == "article" =>
-            inArticle = true
-            immutable.Seq(s)
-          case e: EndElement if e.localName == "article" =>
-            inArticle = false
-            immutable.Seq(e)
-          case element if inArticle =>
-            immutable.Seq(element)
-          case _ =>
-            immutable.Seq.empty
-        }
+      .reduce(_ ++ _)
+      .map(page => {
+        val article = "(?s)<article.*</article>".r.findFirstMatchIn(page.utf8String).get.group(0)
+
+        ByteString(article
+            .replaceAll("https://embed.scalafiddle.io/integration.js", "")
+        )
       })
-//      .map(e => { println(s"e ${e}."); e })
-      .via(XmlWriting.writer)
       .recover {
         case t: Throwable =>
           throw new IllegalStateException(s"Error processing $file", t)
       }
-//      .map(bs => { println(s"bs ${bs.length}."); bs })
   }
 
   try {
@@ -89,6 +73,7 @@ object Main extends App {
 </head>
 <body id="underlay" data-toggler="nav-open">
 <main class="fixed-shift-for-large expanded row">
+<section class="site-content small-12 column">
       """.stripMargin))
     val footer = Source.single(ByteString(
       """
@@ -121,7 +106,6 @@ object Main extends App {
 <script type="text/javascript">//<![CDATA[
 jQuery(function(){window.prettyPrint && prettyPrint()});
 //]]></script>
-<script type="text/javascript" src="assets/js/scalafiddle.js"></script>
 
 
 </body>
