@@ -6,7 +6,7 @@ import akka.stream.alpakka.file.scaladsl.Directory
 import akka.stream.scaladsl.{FileIO, Source}
 import akka.util.ByteString
 
-import scala.concurrent.Await
+import scala.concurrent.{Await, Future}
 import scala.concurrent.duration._
 
 object Main extends App {
@@ -14,9 +14,9 @@ object Main extends App {
   implicit val materializer = ActorMaterializer()
   implicit val ec = system.dispatcher
 
-  def convert(file: Path): Source[ByteString, _] = {
+  def convert(file: Path): Future[ByteString] = {
     FileIO.fromPath(file)
-      .reduce(_ ++ _)
+      .runReduce(_ ++ _)
       .map(page => {
         val article = "(?s)<article.*</article>".r.findFirstMatchIn(page.utf8String).get.group(0)
 
@@ -38,14 +38,13 @@ object Main extends App {
       .walk(source)
       .filter(_.toFile.isFile)
       .filter(_.toFile.getName.endsWith(".html"))
-      .flatMapConcat(file =>
+      .mapAsync(parallelism=20)(file =>
       // TODO proper header/pagebreak
-        Source.single(ByteString(s"\n\n<!-- include of $file -->\n\n")).concat(convert(file))
+        convert(file).map(ByteString(s"\n\n<!-- include of $file -->\n\n") ++ _)
       )
 
-    // Must declare ourselves as xhtml, because that's what the XML writer produces...
     val header = Source.single(ByteString(
-      """<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+      """<!DOCTYPE html>
 <html class="no-js" lang="en">
 
 <head>
@@ -114,9 +113,6 @@ jQuery(function(){window.prettyPrint && prettyPrint()});
 
     val done =
       header.concat(onePageBody).concat(footer).runWith(FileIO.toPath(target))
-//    val done =
-//      convert(Paths.get("/home/aengelen/dev/akka/akka-docs/target/paradox/site/main/stream/operators/Source/zipN.html"))
-//    done.onComplete(println)
 
     Await.result(done, 130.seconds)
   } finally {
